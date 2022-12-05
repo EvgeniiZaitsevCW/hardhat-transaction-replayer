@@ -12,6 +12,11 @@ const rpcUrl: string = process.env.SP_RPC_URL || "http://127.0.0.1:9933";
 // Script parameters
 const textLevelIndent = "  ";
 
+interface ContractEntity {
+  artifact: Artifact;
+  contractFactory: ContractFactory;
+}
+
 function panicErrorCodeToReason(errorCode: number): string {
   switch (errorCode) {
     case 0x1:
@@ -37,25 +42,26 @@ function panicErrorCodeToReason(errorCode: number): string {
   }
 }
 
-async function getDeployableContractFactories(): Promise<ContractFactory[]> {
+async function getDeployableContractEntities(): Promise<ContractEntity[]> {
   const contractFullNames: string[] = await artifacts.getAllFullyQualifiedNames();
-  const deployableContractFactories: ContractFactory[] = [];
+  const deployableContractEntities: ContractEntity[] = [];
   for (let contractFullName of contractFullNames) {
     const artifact: Artifact = await artifacts.readArtifact(contractFullName);
     if (artifact.bytecode !== "0x") {
-      deployableContractFactories.push(await ethers.getContractFactory(contractFullName));
+      const contractFactory: ContractFactory = await ethers.getContractFactory(contractFullName);
+      deployableContractEntities.push({artifact, contractFactory});
     }
   }
-  return deployableContractFactories;
+  return deployableContractEntities;
 }
 
 async function decodeCustomErrorData(errorData: string): Promise<string[]> {
-  const deployableContractFactories = await getDeployableContractFactories();
+  const deployableContractEntites = await getDeployableContractEntities();
   const decodedCustomErrorStrings: string[] = [];
 
-  deployableContractFactories.forEach(contractFactory => {
+  deployableContractEntites.forEach(contractEntity => {
     try {
-      const errorDescription: ErrorDescription = contractFactory.interface.parseError(errorData);
+      const errorDescription: ErrorDescription = contractEntity.contractFactory.interface.parseError(errorData);
       const decodedArgs: string = errorDescription.args.map(arg => {
         const argString = arg.toString();
         if (argString.startsWith("0x")) {
@@ -64,7 +70,8 @@ async function decodeCustomErrorData(errorData: string): Promise<string[]> {
           return argString;
         }
       }).join(", ");
-      const decodedError = `${errorDescription.errorFragment.name}(${decodedArgs})`;
+      const contractName = contractEntity.artifact.contractName;
+      const decodedError = `${errorDescription.errorFragment.name}(${decodedArgs}) -- from contract "${contractName}"`;
       decodedCustomErrorStrings.push(decodedError);
     } catch (e) {
       //do nothing;
