@@ -25,13 +25,19 @@ It can be used to get the reason of a transaction failure in networks without th
 
 4. Change the `config.networks.hardhat` section of the [hardhat.config.ts](./hardhat.config.ts) file according the original network settings: `chainId`, `initialBaseFeePerGas`, `gasPrice`.
 
-5. Change the `config.solidity.version` section of the [hardhat.config.ts](./hardhat.config.ts) file if you need a special version of the Solidity compiller for the contracts from step 3.
+5. Change the `config.solidity.version` section of the [hardhat.config.ts](./hardhat.config.ts) file if you need a special version of the Solidity compiller for the contracts from step 3. If contracts have different compiler versions try the latest one.
 
-6. Configure the input parameters (a transaction hash and the original network RPC URL) of the main script in the `Script input parameters` section of the [replayTransaction.ts](./scripts/replayTransaction.ts) file or by setting the appropriate environment variables mentioned in the file, like: `SP_TX_HASH`, `SP_RPC_URL`.
+6. Check that all contracts are being compiled successfully:
+   ```bash
+   npx hardhat compile
+   ```
+   If some contracts are not compiled, fix them (e.g. change the version of the Solidity compiler at the beginning of the file).
 
-7. Run the main script:
+7. Configure the input parameters (a transaction hash and the original network RPC URL) of the main script in the `Script input parameters` section of the [replayTransaction.ts](./scripts/replayTransaction.ts) file or by setting the appropriate environment variables mentioned in the file, like: `SP_TX_HASH`, `SP_RPC_URL`.
+
+8. Run the main script:
    ```bash
    npx hardhat run scripts/replayTransaction.ts 
    ```
 
-8. Observe the console output.
+9. Observe the console output.
