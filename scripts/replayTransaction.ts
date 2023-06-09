@@ -17,12 +17,85 @@ const txHash: string = process.env.SP_TX_HASH || "0x84766f2002fcf09becb9d42fbc4d
 const rpcUrl: string = process.env.SP_RPC_URL || "https://polygon-rpc.com";
 
 // Script parameters
-const textLevelIndent = "  ";
+interface Config {
+  logSingleLevelIndent: string;
+}
+
+class Context {
+  readonly config: Config;
+  readonly startTime: Date;
+  readonly startTimeFormatted: string;
+  logIndent: string;
+
+  constructor(config: Config) {
+    this.config = config;
+    this.logIndent = "";
+    this.startTime = new Date(Date.now());
+    this.startTimeFormatted = this.#formatDate(this.startTime);
+  }
+
+  increaseLogIndent() {
+    this.logIndent += this.config.logSingleLevelIndent;
+  }
+
+  decreaseLogIndent() {
+    const endIndex = this.logIndent.lastIndexOf(this.config.logSingleLevelIndent);
+    if (endIndex >= 0) {
+      this.logIndent = this.logIndent.substring(0, endIndex);
+    }
+
+  }
+
+  log(message: string, ...values: any[]) {
+    const date = new Date(Date.now());
+    const formattedDate = this.#formatDate(date);
+    console.log(formattedDate + " " + this.logIndent + message, ...values);
+  }
+
+  logEmptyLine() {
+    console.log("");
+  }
+
+  previewLogWithTimeSpace(message: string, ...values: any[]): string {
+    let result = " ".repeat(this.startTimeFormatted.length) + " " + this.logIndent + message;
+    if (values.length > 0) {
+      result += "";
+      for (let i = 0; i < values.length - 1; ++i) {
+        result += values[i].toString() + " ";
+      }
+      result += values[values.length - 1].toString();
+    }
+    return result;
+  }
+
+  getLogIndentWithTimeSpace(): string {
+    return " ".repeat(this.startTimeFormatted.length) + " " + this.logIndent;
+  }
+
+  #formatDate(date: Date): string {
+    return (
+      date.getFullYear().toString().padStart(4, "0") + "-" +
+      (date.getMonth() + 1).toString().padStart(2, "0") + "-" +
+      date.getDate().toString().padStart(2, "0") + " " +
+      date.getHours().toString().padStart(2, "0") + ":" +
+      date.getMinutes().toString().padStart(2, "0") + ":" +
+      date.getSeconds().toString().padStart(2, "0") + "." +
+      date.getMilliseconds().toString().padStart(3, "0")
+    );
+  }
+
+}
 
 interface ContractEntity {
   artifact: Artifact;
   contractFactory: ContractFactory;
 }
+
+const config: Config = {
+  logSingleLevelIndent: "  ",
+};
+
+const context: Context = new Context(config);
 
 function panicErrorCodeToReason(errorCode: number): string {
   switch (errorCode) {
@@ -91,7 +164,7 @@ async function decodeCustomErrorData(errorData: string): Promise<string[]> {
 function decodeRevertMessage(errorData: string): string {
   const content = `0x${errorData.substring(10)}`;
   const reason: Result = ethers.utils.defaultAbiCoder.decode(["string"], content);
-  return `Reverted with the message: "${reason[0]}".`;
+  return `The transaction reverted with string message: '${reason[0]}'.`;
 }
 
 function decodePanicCode(errorData: string): string {
@@ -99,33 +172,44 @@ function decodePanicCode(errorData: string): string {
   const code: Result = ethers.utils.defaultAbiCoder.decode(["uint"], content);
   const codeHex: string = code[0].toHexString();
   const reason: string = panicErrorCodeToReason(code[0].toNumber());
-  return `Panicked with the code: "${codeHex}"(${reason}).`;
+  return `The transaction reverted due to panic with code: ${codeHex} ('${reason}').`;
 }
 
-async function decodeErrorData(errorData: string, textIndent: string): Promise<string> {
-  const nextLevelTextIndent = textIndent + textLevelIndent;
+async function decodeErrorData(errorData: string, context: Context): Promise<string> {
   const decodedCustomErrorStrings = await decodeCustomErrorData(errorData);
   let result: string;
   let isCustomErrorOnly = false;
 
   if (errorData.startsWith("0x08c379a0")) { // decode Error(string)
-    result = textIndent + decodeRevertMessage(errorData);
+    result = context.previewLogWithTimeSpace(decodeRevertMessage(errorData));
   } else if (errorData.startsWith("0x4e487b71")) { // decode Panic(uint)
-    result = textIndent + decodePanicCode(errorData);
+    result = context.previewLogWithTimeSpace(decodePanicCode(errorData));
   } else {
     isCustomErrorOnly = true;
     if (decodedCustomErrorStrings.length > 0) {
-      result = textIndent + "Reverted with a custom error (or several suitable ones):\n" +
-        nextLevelTextIndent + decodedCustomErrorStrings.join("\n" + nextLevelTextIndent);
+      result = context.previewLogWithTimeSpace(
+        "The transaction reverted with custom error (or several suitable ones):\n");
+      context.increaseLogIndent();
+      result += context.getLogIndentWithTimeSpace() +
+        decodedCustomErrorStrings.join("\n" + context.getLogIndentWithTimeSpace());
+      context.decreaseLogIndent();
     } else {
-      result = textIndent + "Reverted with a custom error that can't be decoded using the provided contracts.\n" +
-        textIndent + `Try to add more contract(s) to the "contracts" directory to get decoded error.`;
+      result = context.previewLogWithTimeSpace(
+        "The transaction reverted with a custom error that cannot be decoded using the provided contracts.\n"
+      );
+      result += context.previewLogWithTimeSpace(
+        `Try to add more contract(s) to the "contracts" directory to get decoded error.`
+      );
     }
   }
   if (!isCustomErrorOnly) {
     if (decodedCustomErrorStrings.length > 0) {
-      result += "\n" + textIndent + "Also it can be the following custom error(s):\n" + nextLevelTextIndent +
-        decodedCustomErrorStrings.join("\n" + nextLevelTextIndent);
+      result += "\n";
+      result += context.previewLogWithTimeSpace("Also it can be the following custom error(s):\n");
+      context.increaseLogIndent();
+      result +=
+        context.getLogIndentWithTimeSpace() + decodedCustomErrorStrings.join("\n" + context.getLogIndentWithTimeSpace());
+      context.decreaseLogIndent();
     }
   }
   return result;
@@ -141,7 +225,8 @@ function defineRawTransaction(tx: Transaction): string {
   }
 
   // Extract the relevant parts of the transaction and signature
-  const txFields: string[] = "accessList chainId data gasPrice gasLimit maxFeePerGas maxPriorityFeePerGas nonce to type value".split(" ");
+  const txFields: string[] =
+    "accessList chainId data gasPrice gasLimit maxFeePerGas maxPriorityFeePerGas nonce to type value".split(" ");
   const sigFields: string[] = "v r s".split(" ");
 
   const t: UnsignedTransaction = txFields.reduce(addKey, {});
@@ -164,18 +249,18 @@ function defineRawTransaction(tx: Transaction): string {
 function checkTransaction(
   txResponse: TransactionResponse,
   txReceipt: TransactionReceipt,
-  textIndent: string
+  context: Context
 ): boolean {
   if (!txResponse) {
-    console.log(textIndent + "⛔ The transaction with the provided hash does not exist.");
+    context.log("⛔ The transaction with the provided hash does not exist.");
     return false;
   }
   if (!txResponse.blockNumber) {
-    console.log(textIndent + "⛔ The transaction with the provided hash has not been minted yet.");
+    context.log("⛔ The transaction with the provided hash has not been minted yet.");
     return false;
   }
   if (!txReceipt) {
-    console.log(textIndent + "⛔ The transaction's receipt has not been found.");
+    context.log("⛔ The transaction's receipt has not been found.");
     return false;
   }
   return true;
@@ -185,7 +270,7 @@ function checkTransaction(
 async function sendPreviousTransactions(
   block: BlockWithTransactions,
   txResponse: TransactionResponse,
-  textIndent: string
+  context: Context
 ) {
   for (const tx of block.transactions) {
     if (tx.hash === txResponse.hash) {
@@ -193,66 +278,81 @@ async function sendPreviousTransactions(
     }
     try {
       await ethers.provider.sendTransaction(tx.raw ?? defineRawTransaction(tx));
-      console.log(textIndent + `👉 Sending of transaction with hash ${tx.hash} succeeded!`);
+      context.log(`👉 Sending of transaction with hash ${tx.hash} succeeded!`);
     } catch (e: any) {
-      console.log(
-        textIndent + `👉 Sending of transaction with hash ${tx.hash} failed! The exception message:`, e.message
-      );
+      context.log(`👉 Sending of transaction with hash ${tx.hash} failed! The exception message:`, e.message);
     }
   }
 }
 
-async function main() {
-  console.log(`👋 Transaction replayer is ready.`);
-  const textIndent1 = textLevelIndent;
-  const textIndent2 = textIndent1 + textLevelIndent;
-  const textIndent3 = textIndent2 + textLevelIndent;
-  const provider: Provider = new ethers.providers.JsonRpcProvider(rpcUrl);
-  console.log("");
+async function decodeExceptionData(e: any): Promise<string> {
+  const errorData = e.data;
+  let result: string = "";
+  if (!!errorData && errorData.length > 2) {
+    result += await decodeErrorData(errorData, context);
+  } else if (e.message.includes("reverted without a reason")) {
+    result += context.previewLogWithTimeSpace("The transaction reverted without error data. " +
+      "Perhaps the transaction tries to call a nonexistent contract function or " +
+      "contains wrong data that cannot be used to call a particular contract function."
+    );
+  }
+  return result;
+}
 
-  console.log(`🏁 Checking the original network RPC with URL:`, rpcUrl, "...");
+async function main() {
+  context.log(`👋 Transaction replayer is ready.`);
+  const provider: Provider = new ethers.providers.JsonRpcProvider(rpcUrl);
+  context.logEmptyLine();
+
+  context.log(`🏁 Checking the original network RPC with URL:`, rpcUrl, "...");
   const originalNetwork = await provider.getNetwork();
   if (originalNetwork.chainId !== network.config.chainId) {
-    console.log(
-      "⛔ The original network chain ID does not match the one of the forked network! " +
+    context.log(
+      "⛔ The original network chain ID does not match the one of the Hardhat network! " +
       "Check the settings in the 'hardhat.config.ts' file. Check the original network RPC URL."
     );
     return;
   }
-  console.log("✅ The RPC works fine.");
-  console.log("");
+  context.log("✅ The check has been finished successfully. The RPC works fine.");
+  context.logEmptyLine();
 
-  console.log(`🏁 Replaying the transaction with hash`, txHash, "...");
+  context.log(`🏁 Replaying the transaction with hash`, txHash, "...");
+  context.increaseLogIndent();
 
-  console.log(textIndent1 + "🏁 Getting the transaction response and receipt from the original network ...");
+  context.log("🏁 Getting the transaction response and receipt from the original network ...");
   const txResponse: TransactionResponse = await provider.getTransaction(txHash);
   const txReceipt: TransactionReceipt = await provider.getTransactionReceipt(txHash);
-  if (!checkTransaction(txResponse, txReceipt, textIndent1)) {
+  if (!checkTransaction(txResponse, txReceipt, context)) {
     return;
   }
   if (!txResponse.raw) {
     txResponse.raw = defineRawTransaction(txResponse);
-    console.log(textIndent2 + "👉 The transaction does not have the raw data. It has been redefined.");
+    context.increaseLogIndent();
+    context.log("👉 The transaction does not have the raw data. It has been redefined.");
+    context.decreaseLogIndent();
   }
-  console.log(textIndent1 + "✅ The transaction has been gotten successfully:");
-  console.log(textIndent2 + "👉 The block number of the transaction in the original chain:", txResponse.blockNumber);
-  console.log(textIndent2 + "👉 The raw data of the signed transaction:", txResponse.raw);
-  console.log("");
+  context.log(
+    "✅ The transaction has been gotten successfully. Its block number in the original chain:",
+    txResponse.blockNumber,
+    ". Its raw data:",
+    txResponse.raw
+  );
+  context.logEmptyLine();
 
-  console.log(textIndent1 + `🏁 Getting data of the block with other transactions ...`);
+  context.log(`🏁 Getting data of the block that contains the transaction ...`);
   const block: BlockWithTransactions = await provider.getBlockWithTransactions(txResponse.blockNumber ?? 0);
   if (block.transactions[txReceipt.transactionIndex].hash !== txResponse.hash) {
-    console.log(textIndent1 + "⛔ The position of the target tx in the tx array doesn't match its index in the block.");
+    context.log("⛔ The position of the target transaction doesn't match its index in the block transaction array.");
     return;
   }
-  console.log(
-    textIndent1 + "✅ The block has been gotten successfully. The number of txs prior the target one:",
+  context.log(
+    "✅ The block has been gotten successfully. The number of transactions prior the target one:",
     txReceipt.transactionIndex
   );
-  console.log("");
+  context.logEmptyLine();
 
   const previousBlockNumber = txResponse.blockNumber - 1;
-  console.log(textIndent1 + "🏁 Resetting the Hardhat network with forking for the previous block ...");
+  context.log("🏁 Resetting the Hardhat network with forking for the previous block ...");
   await network.provider.request({
     method: "hardhat_reset",
     params: [
@@ -264,44 +364,37 @@ async function main() {
       },
     ],
   });
-  console.log(textIndent1 + "✅ The resetting has done successfully. The current block:", previousBlockNumber);
-  console.log("");
+  context.log("✅ The resetting has done successfully. The current block:", previousBlockNumber);
+  context.logEmptyLine();
 
-  console.log(textIndent1 + "🏁 Minting the block", previousBlockNumber, "...");
+  context.log("🏁 Minting the block", previousBlockNumber, "...");
   await ethers.provider.send("evm_mine", []);
-  console.log(textIndent1 + "✅ The minting has done successfully.");
-  console.log("");
+  context.log("✅ The minting has done successfully.");
+  context.logEmptyLine();
 
   if (txReceipt.transactionIndex > 0) {
-    console.log(
-      textIndent1 + "🏁 Sending the transactions prior to the target one in the block to the forked network ..."
-    );
-    await sendPreviousTransactions(block, txResponse, textIndent2);
-    console.log(textIndent1 + "✅ All the previous transactions have been sent!");
-    console.log("");
+    context.log("🏁 Sending the transactions prior to the target one in the block to the forked network ...");
+    context.increaseLogIndent();
+    await sendPreviousTransactions(block, txResponse, context);
+    context.decreaseLogIndent();
+    context.log("✅ All the previous transactions have been sent!");
+    context.logEmptyLine();
   }
 
-  console.log(textIndent1 + "🏁 Sending the target transaction to the forked network ...");
+  context.log("🏁 Sending the target transaction to the forked network ...");
   try {
     await ethers.provider.sendTransaction(txResponse.raw);
-    console.log(textIndent1 + "✅ The transaction has been sent and minted successfully!");
+    context.log("✅ The transaction has been sent and minted successfully!");
   } catch (e: any) {
-    const errorData = e.data;
-    console.log(textIndent1 + `❌ The transaction sending or minting has been failed!`);
-    console.log(textIndent2 + `👉 The exception message:`, e.message);
-    if (!!errorData && errorData.length > 2) {
-      console.log(textIndent2 + "👉 The result of error data decoding:");
-      console.log(await decodeErrorData(errorData, textIndent3 + " "));
-    } else if (e.message.includes("reverted without a reason")) {
-      console.log(textIndent2 + "👉 There is no error data. " +
-        "Perhaps the transaction tried to call a nonexistent contract function or " +
-        "contains wrong data that cannot be used to call a particular contract function."
-      );
-    }
+    context.increaseLogIndent();
+    const decodingResult: string = await decodeExceptionData(e);
+    context.decreaseLogIndent();
+    context.log(`❌ The transaction sending or minting has been failed! The exception message: ${e.message}\n` + decodingResult);
   }
-  console.log("");
+  context.logEmptyLine();
+  context.decreaseLogIndent();
 
-  console.log("✅ Everything is done! Bye.");
+  context.log("✅ Everything is done! Bye.");
 }
 
 main();
