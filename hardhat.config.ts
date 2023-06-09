@@ -16,7 +16,7 @@ const config: HardhatUserConfig = {
       accounts: {
         mnemonic: "test test test test test test test test test test test junk",
       },
-      chainId: 420,
+      chainId: 137,
       initialBaseFeePerGas: 0,
       gasPrice: 0,
       blockGasLimit: 4294967295,

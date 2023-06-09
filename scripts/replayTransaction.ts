@@ -13,8 +13,8 @@ import { Transaction, UnsignedTransaction } from "@ethersproject/transactions";
 import { SignatureLike } from "@ethersproject/bytes";
 
 // Script input parameters
-const txHash: string = process.env.SP_TX_HASH || "0x0000000000000000000000000000000000000000000000000000000000000001";
-const rpcUrl: string = process.env.SP_RPC_URL || "http://127.0.0.1:9933";
+const txHash: string = process.env.SP_TX_HASH || "0x84766f2002fcf09becb9d42fbc4d4fd20e1fce5b65408e3241e19f59ed1a0f79";
+const rpcUrl: string = process.env.SP_RPC_URL || "https://polygon-rpc.com";
 
 // Script parameters
 const textLevelIndent = "  ";
@@ -203,13 +203,26 @@ async function sendPreviousTransactions(
 }
 
 async function main() {
-  console.log(`🏁 Replaying the transaction with hash`, txHash, "...");
+  console.log(`👋 Transaction replayer is ready.`);
   const textIndent1 = textLevelIndent;
   const textIndent2 = textIndent1 + textLevelIndent;
   const textIndent3 = textIndent2 + textLevelIndent;
-  console.log(textIndent1 + `👉 Original network RPC URL:`, rpcUrl);
   const provider: Provider = new ethers.providers.JsonRpcProvider(rpcUrl);
   console.log("");
+
+  console.log(`🏁 Checking the original network RPC with URL:`, rpcUrl, "...");
+  const originalNetwork = await provider.getNetwork();
+  if (originalNetwork.chainId !== network.config.chainId) {
+    console.log(
+      "⛔ The original network chain ID does not match the one of the forked network! " +
+      "Check the settings in the 'hardhat.config.ts' file. Check the original network RPC URL."
+    );
+    return;
+  }
+  console.log("✅ The RPC works fine.");
+  console.log("");
+
+  console.log(`🏁 Replaying the transaction with hash`, txHash, "...");
 
   console.log(textIndent1 + "🏁 Getting the transaction response and receipt from the original network ...");
   const txResponse: TransactionResponse = await provider.getTransaction(txHash);
@@ -286,6 +299,9 @@ async function main() {
       );
     }
   }
+  console.log("");
+
+  console.log("✅ Everything is done! Bye.");
 }
 
 main();
