@@ -4,6 +4,13 @@ import { Artifact } from "hardhat/src/types/artifacts";
 import { Provider } from "@ethersproject/providers";
 import { ErrorDescription } from "@ethersproject/abi/src.ts/interface";
 import { Result } from "@ethersproject/abi";
+import {
+  BlockWithTransactions,
+  TransactionReceipt,
+  TransactionResponse
+} from "@ethersproject/abstract-provider";
+import { Transaction, UnsignedTransaction } from "@ethersproject/transactions";
+import { SignatureLike } from "@ethersproject/bytes";
 
 // Script input parameters
 const txHash: string = process.env.SP_TX_HASH || "0x0000000000000000000000000000000000000000000000000000000000000001";
@@ -49,7 +56,7 @@ async function getDeployableContractEntities(): Promise<ContractEntity[]> {
     const artifact: Artifact = await artifacts.readArtifact(contractFullName);
     if (artifact.bytecode !== "0x") {
       const contractFactory: ContractFactory = await ethers.getContractFactory(contractFullName);
-      deployableContractEntities.push({artifact, contractFactory});
+      deployableContractEntities.push({ artifact, contractFactory });
     }
   }
   return deployableContractEntities;
@@ -117,13 +124,83 @@ async function decodeErrorData(errorData: string, textIndent: string): Promise<s
   }
   if (!isCustomErrorOnly) {
     if (decodedCustomErrorStrings.length > 0) {
-      result += ` Also it can be the following custom error(s):\n` + nextLevelTextIndent +
+      result += "\n" + textIndent + "Also it can be the following custom error(s):\n" + nextLevelTextIndent +
         decodedCustomErrorStrings.join("\n" + nextLevelTextIndent);
     }
   }
   return result;
 }
 
+// Based on this: https://docs.ethers.org/v5/cookbook/transactions/#cookbook--compute-raw-transaction
+function defineRawTransaction(tx: Transaction): string {
+  function addKey(accum: string, key: string): any {
+    if (tx[key] !== undefined && tx[key] !== null) {
+      accum[key] = tx[key];
+    }
+    return accum;
+  }
+
+  // Extract the relevant parts of the transaction and signature
+  const txFields: string[] = "accessList chainId data gasPrice gasLimit maxFeePerGas maxPriorityFeePerGas nonce to type value".split(" ");
+  const sigFields: string[] = "v r s".split(" ");
+
+  const t: UnsignedTransaction = txFields.reduce(addKey, {});
+  const s: SignatureLike = sigFields.reduce(addKey, {});
+  if (t.type == 2) {
+    t.gasPrice = undefined;
+  }
+
+  // Serialize the signed transaction
+  const raw = ethers.utils.serializeTransaction(t, s);
+
+  // Double check things went well
+  if (ethers.utils.keccak256(raw) !== tx.hash) {
+    throw new Error("serializing failed!");
+  }
+
+  return raw;
+}
+
+function checkTransaction(
+  txResponse: TransactionResponse,
+  txReceipt: TransactionReceipt,
+  textIndent: string
+): boolean {
+  if (!txResponse) {
+    console.log(textIndent + "⛔ The transaction with the provided hash does not exist.");
+    return false;
+  }
+  if (!txResponse.blockNumber) {
+    console.log(textIndent + "⛔ The transaction with the provided hash has not been minted yet.");
+    return false;
+  }
+  if (!txReceipt) {
+    console.log(textIndent + "⛔ The transaction's receipt has not been found.");
+    return false;
+  }
+  return true;
+}
+
+
+async function sendPreviousTransactions(
+  block: BlockWithTransactions,
+  txResponse: TransactionResponse,
+  textIndent: string
+) {
+  for (const tx of block.transactions) {
+    if (tx.hash === txResponse.hash) {
+      break;
+    }
+    try {
+      await ethers.provider.sendTransaction(tx.raw ?? defineRawTransaction(tx));
+      console.log(textIndent + `👉 Sending of transaction with hash ${tx.hash} succeeded!`);
+    } catch (e: any) {
+      console.log(
+        textIndent + `👉 Sending of transaction with hash ${tx.hash} failed! The exception message:`, e.message
+      );
+    }
+  }
+}
 
 async function main() {
   console.log(`🏁 Replaying the transaction with hash`, txHash, "...");
@@ -134,24 +211,31 @@ async function main() {
   const provider: Provider = new ethers.providers.JsonRpcProvider(rpcUrl);
   console.log("");
 
-  console.log(textIndent1 + "🏁 Getting the transaction response from the original network ...");
-  const txResponse = await provider.getTransaction(txHash);
-
-  if (!txResponse) {
-    console.log(textIndent1 + "⛔ The transaction with the provided hash does not exist.");
-    return;
-  }
-  if (!txResponse.blockNumber) {
-    console.log(textIndent1 + "⛔ The transaction with the provided hash has not been minted yet.");
+  console.log(textIndent1 + "🏁 Getting the transaction response and receipt from the original network ...");
+  const txResponse: TransactionResponse = await provider.getTransaction(txHash);
+  const txReceipt: TransactionReceipt = await provider.getTransactionReceipt(txHash);
+  if (!checkTransaction(txResponse, txReceipt, textIndent1)) {
     return;
   }
   if (!txResponse.raw) {
-    console.log(textIndent1 + "⛔ The transaction does not have the raw data with the signature. Check the RPC!");
-    return;
+    txResponse.raw = defineRawTransaction(txResponse);
+    console.log(textIndent2 + "👉 The transaction does not have the raw data. It has been redefined.");
   }
   console.log(textIndent1 + "✅ The transaction has been gotten successfully:");
   console.log(textIndent2 + "👉 The block number of the transaction in the original chain:", txResponse.blockNumber);
   console.log(textIndent2 + "👉 The raw data of the signed transaction:", txResponse.raw);
+  console.log("");
+
+  console.log(textIndent1 + `🏁 Getting data of the block with other transactions ...`);
+  const block: BlockWithTransactions = await provider.getBlockWithTransactions(txResponse.blockNumber ?? 0);
+  if (block.transactions[txReceipt.transactionIndex].hash !== txResponse.hash) {
+    console.log(textIndent1 + "⛔ The position of the target tx in the tx array doesn't match its index in the block.");
+    return;
+  }
+  console.log(
+    textIndent1 + "✅ The block has been gotten successfully. The number of txs prior the target one:",
+    txReceipt.transactionIndex
+  );
   console.log("");
 
   const previousBlockNumber = txResponse.blockNumber - 1;
@@ -175,18 +259,31 @@ async function main() {
   console.log(textIndent1 + "✅ The minting has done successfully.");
   console.log("");
 
-  console.log(textIndent1 + "🏁 Sending the transaction to the forked network ...");
+  if (txReceipt.transactionIndex > 0) {
+    console.log(
+      textIndent1 + "🏁 Sending the transactions prior to the target one in the block to the forked network ..."
+    );
+    await sendPreviousTransactions(block, txResponse, textIndent2);
+    console.log(textIndent1 + "✅ All the previous transactions have been sent!");
+    console.log("");
+  }
+
+  console.log(textIndent1 + "🏁 Sending the target transaction to the forked network ...");
   try {
     await ethers.provider.sendTransaction(txResponse.raw);
-    console.log(textIndent1 + "✅ The transaction has been sent successfully!");
+    console.log(textIndent1 + "✅ The transaction has been sent and minted successfully!");
   } catch (e: any) {
     const errorData = e.data;
-    console.log(textIndent1 + `❌ Transaction sending failed!`);
+    console.log(textIndent1 + `❌ The transaction sending or minting has been failed!`);
     console.log(textIndent2 + `👉 The exception message:`, e.message);
-    console.log(textIndent2 + `👉 The error data:`, errorData);
     if (!!errorData && errorData.length > 2) {
       console.log(textIndent2 + "👉 The result of error data decoding:");
       console.log(await decodeErrorData(errorData, textIndent3 + " "));
+    } else if (e.message.includes("reverted without a reason")) {
+      console.log(textIndent2 + "👉 There is no error data. " +
+        "Perhaps the transaction tried to call a nonexistent contract function or " +
+        "contains wrong data that cannot be used to call a particular contract function."
+      );
     }
   }
 }
