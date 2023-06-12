@@ -465,7 +465,7 @@ async function replaySingleTransaction(txHash: string, context: Context): Promis
     result = "✅ The transaction has been sent and minted successfully!";
   } catch (e: any) {
     const decodingResult: string = await decodeExceptionData(e);
-    if (decodingResult.length != 0 && txHash != "0x2d83b7fa295da0a41684c97ff1eb92f0241735859062a4e943ae343d754e9804") {
+    if (decodingResult.length != 0) {
       result = decodingResult;
     } else {
       result = `❌ The transaction sending or minting has been failed with the exception: ${e.message}`;
