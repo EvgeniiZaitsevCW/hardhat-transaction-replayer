@@ -11,49 +11,97 @@ import {
 } from "@ethersproject/abstract-provider";
 import { Transaction, UnsignedTransaction } from "@ethersproject/transactions";
 import { SignatureLike } from "@ethersproject/bytes";
+import { parse } from "csv-parse";
+import fs from "fs";
+import os from "os";
 
 // Script input parameters
-const txHash: string = process.env.SP_TX_HASH || "0x84766f2002fcf09becb9d42fbc4d4fd20e1fce5b65408e3241e19f59ed1a0f79";
 const rpcUrl: string = process.env.SP_RPC_URL || "https://polygon-rpc.com";
+const txHashes: string = process.env.SP_TX_HASHES || `
+0xca284df3888756806e406c50b6e1f9d45c1997c44972704b06f8162de450211f
+0xd556849b8a916d7dff644eb97288ffa1f26e810805cb98ebcbff3f95c8957abe
+`;
+const txHashesFile: string = process.env.SP_TX_HASHES_FILE || "";
+const txHashesColumn: string = process.env.SP_TX_HASHES_COLUMN || `tx_hash`;
+const columnDelimiter: string = process.env.SP_COLUMN_DELIMITER || `\t`;
+const outputFile: string = process.env.SP_OUTPUT_FILE || "";
+const verboseLogging: boolean = (process.env.SP_VERBOSE_LOGGING || "false").toLowerCase() === "true";
 
-// Script parameters
+// Script config
 interface Config {
   logSingleLevelIndent: string;
+  rpcUrl: string;
+  txHashesString: string;
+  txHashesFilePath: string;
+  txHashesColumn: string;
+  columnDelimiter: string;
+  outputFilePath: string;
+  verboseLogging: boolean;
 }
+
+const config: Config = {
+  logSingleLevelIndent: "  ",
+  rpcUrl,
+  txHashesString: txHashes,
+  txHashesFilePath: txHashesFile,
+  txHashesColumn,
+  columnDelimiter,
+  outputFilePath: outputFile,
+  verboseLogging
+};
 
 class Context {
   readonly config: Config;
   readonly startTime: Date;
   readonly startTimeFormatted: string;
   logIndent: string;
+  txHashes: string[];
+  provider: Provider;
+  logEnabled: boolean;
 
   constructor(config: Config) {
     this.config = config;
     this.logIndent = "";
     this.startTime = new Date(Date.now());
     this.startTimeFormatted = this.#formatDate(this.startTime);
+    this.logEnabled = true;
   }
 
-  increaseLogIndent() {
-    this.logIndent += this.config.logSingleLevelIndent;
+  increaseLogIndent(numberOfSteps: number = 1) {
+    this.logIndent += this.config.logSingleLevelIndent.repeat(numberOfSteps);
   }
 
-  decreaseLogIndent() {
-    const endIndex = this.logIndent.lastIndexOf(this.config.logSingleLevelIndent);
-    if (endIndex >= 0) {
-      this.logIndent = this.logIndent.substring(0, endIndex);
+  decreaseLogIndent(numberOfSteps: number = 1) {
+    while (numberOfSteps-- > 0) {
+      const endIndex = this.logIndent.lastIndexOf(this.config.logSingleLevelIndent);
+      if (endIndex >= 0) {
+        this.logIndent = this.logIndent.substring(0, endIndex);
+      }
     }
-
   }
 
   log(message: string, ...values: any[]) {
+    if (!this.logEnabled) {
+      return;
+    }
     const date = new Date(Date.now());
     const formattedDate = this.#formatDate(date);
     console.log(formattedDate + " " + this.logIndent + message, ...values);
   }
 
   logEmptyLine() {
+    if (!this.logEnabled) {
+      return;
+    }
     console.log("");
+  }
+
+  enableLog() {
+    this.logEnabled = true;
+  }
+
+  disableLog() {
+    this.logEnabled = false;
   }
 
   previewLogWithTimeSpace(message: string, ...values: any[]): string {
@@ -70,6 +118,68 @@ class Context {
 
   getLogIndentWithTimeSpace(): string {
     return " ".repeat(this.startTimeFormatted.length) + " " + this.logIndent;
+  }
+
+  async initTxHashes() {
+    if (this.config.txHashesFilePath.length == 0) {
+      this.txHashes = this.#getHexNumberArray(this.config.txHashesString);
+    } else {
+      if (!fs.existsSync(this.config.txHashesFilePath)) {
+        throw new Error("The provided file with tx hashes does not exist. Check the settings");
+      }
+      this.txHashes = [];
+      const parser = parse({
+        delimiter: this.config.columnDelimiter,
+        columns: true,
+      });
+      const parsedRecords = fs.createReadStream(this.config.txHashesFilePath).pipe(parser);
+      for await (const record of parsedRecords) {
+        const txHashString = record[this.config.txHashesColumn];
+        if (!txHashString) {
+          throw new Error(
+            `There is no column '${this.config.txHashesColumn}' in the file with tx hashes. Check the settings`
+          );
+        }
+        const txHash: string = this.#getHexNumberArray(txHashString)[0];
+        this.txHashes.push(txHash);
+      }
+    }
+  }
+
+  initProvider() {
+    this.provider = new ethers.providers.JsonRpcProvider(config.rpcUrl);
+  }
+
+  initStorageFile() {
+    if (this.config.outputFilePath.length != 0) {
+      let needInitialization = false;
+      if (!fs.existsSync(this.config.outputFilePath)) {
+        needInitialization = true;
+      } else {
+        const fileStat = fs.statSync(this.config.outputFilePath);
+        if (fileStat.size == 0) {
+          needInitialization = true;
+        }
+      }
+
+      if (needInitialization) {
+        const header = "tx_hash\tresult" + os.EOL;
+        fs.appendFileSync(this.config.outputFilePath, header);
+      }
+    }
+  }
+
+  storeResult(txHash: string, result: string) {
+    if (this.config.outputFilePath.length != 0) {
+      const formattedResult: string = result.replace(/\s+/gi, " ");
+      const row = txHash + "\t" + formattedResult + os.EOL;
+      fs.appendFileSync(this.config.outputFilePath, row);
+    }
+  }
+
+  #getHexNumberArray(hexNumberArrayString: string): string[] {
+    const hexNumberArray: string[] = hexNumberArrayString.split(/[^0-9a-z]+/ig);
+    return hexNumberArray.filter(s => s.length > 0);
   }
 
   #formatDate(date: Date): string {
@@ -90,10 +200,6 @@ interface ContractEntity {
   artifact: Artifact;
   contractFactory: ContractFactory;
 }
-
-const config: Config = {
-  logSingleLevelIndent: "  ",
-};
 
 const context: Context = new Context(config);
 
@@ -164,7 +270,7 @@ async function decodeCustomErrorData(errorData: string): Promise<string[]> {
 function decodeRevertMessage(errorData: string): string {
   const content = `0x${errorData.substring(10)}`;
   const reason: Result = ethers.utils.defaultAbiCoder.decode(["string"], content);
-  return `The transaction reverted with string message: '${reason[0]}'.`;
+  return `❌ The transaction reverted with string message: '${reason[0]}'.`;
 }
 
 function decodePanicCode(errorData: string): string {
@@ -172,7 +278,7 @@ function decodePanicCode(errorData: string): string {
   const code: Result = ethers.utils.defaultAbiCoder.decode(["uint"], content);
   const codeHex: string = code[0].toHexString();
   const reason: string = panicErrorCodeToReason(code[0].toNumber());
-  return `The transaction reverted due to panic with code: ${codeHex} ('${reason}').`;
+  return `❌ The transaction reverted due to panic with code: ${codeHex} ('${reason}').`;
 }
 
 async function decodeErrorData(errorData: string, context: Context): Promise<string> {
@@ -181,22 +287,20 @@ async function decodeErrorData(errorData: string, context: Context): Promise<str
   let isCustomErrorOnly = false;
 
   if (errorData.startsWith("0x08c379a0")) { // decode Error(string)
-    result = context.previewLogWithTimeSpace(decodeRevertMessage(errorData));
+    result = decodeRevertMessage(errorData);
   } else if (errorData.startsWith("0x4e487b71")) { // decode Panic(uint)
-    result = context.previewLogWithTimeSpace(decodePanicCode(errorData));
+    result = decodePanicCode(errorData);
   } else {
     isCustomErrorOnly = true;
     if (decodedCustomErrorStrings.length > 0) {
-      result = context.previewLogWithTimeSpace(
-        "The transaction reverted with custom error (or several suitable ones):\n");
-      context.increaseLogIndent();
+      result = "❌ The transaction reverted with custom error (or several suitable ones):" + os.EOL;
+      context.increaseLogIndent(2);
       result += context.getLogIndentWithTimeSpace() +
-        decodedCustomErrorStrings.join("\n" + context.getLogIndentWithTimeSpace());
-      context.decreaseLogIndent();
+        decodedCustomErrorStrings.join(os.EOL + context.getLogIndentWithTimeSpace());
+      context.decreaseLogIndent(2);
     } else {
-      result = context.previewLogWithTimeSpace(
-        "The transaction reverted with a custom error that cannot be decoded using the provided contracts.\n"
-      );
+      result = `❌ The transaction reverted with a custom error (data: ${errorData}) ` +
+        `that cannot be decoded using the provided contracts.` + os.EOL;
       result += context.previewLogWithTimeSpace(
         `Try to add more contract(s) to the "contracts" directory to get decoded error.`
       );
@@ -204,12 +308,12 @@ async function decodeErrorData(errorData: string, context: Context): Promise<str
   }
   if (!isCustomErrorOnly) {
     if (decodedCustomErrorStrings.length > 0) {
-      result += "\n";
-      result += context.previewLogWithTimeSpace("Also it can be the following custom error(s):\n");
-      context.increaseLogIndent();
-      result +=
-        context.getLogIndentWithTimeSpace() + decodedCustomErrorStrings.join("\n" + context.getLogIndentWithTimeSpace());
-      context.decreaseLogIndent();
+      result += os.EOL;
+      result += context.previewLogWithTimeSpace("Also it can be the following custom error(s):" + os.EOL);
+      context.increaseLogIndent(2);
+      result += context.getLogIndentWithTimeSpace() +
+        decodedCustomErrorStrings.join(os.EOL + context.getLogIndentWithTimeSpace());
+      context.decreaseLogIndent(2);
     }
   }
   return result;
@@ -249,21 +353,16 @@ function defineRawTransaction(tx: Transaction): string {
 function checkTransaction(
   txResponse: TransactionResponse,
   txReceipt: TransactionReceipt,
-  context: Context
-): boolean {
+) {
   if (!txResponse) {
-    context.log("⛔ The transaction with the provided hash does not exist.");
-    return false;
+    throw new Error("The transaction with the provided hash does not exist");
   }
   if (!txResponse.blockNumber) {
-    context.log("⛔ The transaction with the provided hash has not been minted yet.");
-    return false;
+    throw new Error("The transaction with the provided hash has not been minted yet");
   }
   if (!txReceipt) {
-    context.log("⛔ The transaction's receipt has not been found.");
-    return false;
+    throw new Error(" The transaction's receipt has not been found.");
   }
-  return true;
 }
 
 
@@ -291,40 +390,20 @@ async function decodeExceptionData(e: any): Promise<string> {
   if (!!errorData && errorData.length > 2) {
     result += await decodeErrorData(errorData, context);
   } else if (e.message.includes("reverted without a reason")) {
-    result += context.previewLogWithTimeSpace("The transaction reverted without error data. " +
+    result += "❌ The transaction reverted without error data. " +
       "Perhaps the transaction tries to call a nonexistent contract function or " +
-      "contains wrong data that cannot be used to call a particular contract function."
-    );
+      "contains wrong data that cannot be used to call a particular contract function.";
   }
   return result;
 }
 
-async function main() {
-  context.log(`👋 Transaction replayer is ready.`);
-  const provider: Provider = new ethers.providers.JsonRpcProvider(rpcUrl);
-  context.logEmptyLine();
-
-  context.log(`🏁 Checking the original network RPC with URL:`, rpcUrl, "...");
-  const originalNetwork = await provider.getNetwork();
-  if (originalNetwork.chainId !== network.config.chainId) {
-    context.log(
-      "⛔ The original network chain ID does not match the one of the Hardhat network! " +
-      "Check the settings in the 'hardhat.config.ts' file. Check the original network RPC URL."
-    );
-    return;
-  }
-  context.log("✅ The check has been finished successfully. The RPC works fine.");
-  context.logEmptyLine();
-
-  context.log(`🏁 Replaying the transaction with hash`, txHash, "...");
-  context.increaseLogIndent();
-
+async function replaySingleTransaction(txHash: string, context: Context): Promise<string> {
+  let result: string = "";
   context.log("🏁 Getting the transaction response and receipt from the original network ...");
-  const txResponse: TransactionResponse = await provider.getTransaction(txHash);
-  const txReceipt: TransactionReceipt = await provider.getTransactionReceipt(txHash);
-  if (!checkTransaction(txResponse, txReceipt, context)) {
-    return;
-  }
+  const txResponse: TransactionResponse = await context.provider.getTransaction(txHash);
+  const txReceipt: TransactionReceipt = await context.provider.getTransactionReceipt(txHash);
+  checkTransaction(txResponse, txReceipt);
+
   if (!txResponse.raw) {
     txResponse.raw = defineRawTransaction(txResponse);
     context.increaseLogIndent();
@@ -332,7 +411,7 @@ async function main() {
     context.decreaseLogIndent();
   }
   context.log(
-    "✅ The transaction has been gotten successfully. Its block number in the original chain:",
+    "✔ The transaction has been gotten successfully. Its block number in the original chain:",
     txResponse.blockNumber,
     ". Its raw data:",
     txResponse.raw
@@ -340,13 +419,12 @@ async function main() {
   context.logEmptyLine();
 
   context.log(`🏁 Getting data of the block that contains the transaction ...`);
-  const block: BlockWithTransactions = await provider.getBlockWithTransactions(txResponse.blockNumber ?? 0);
+  const block: BlockWithTransactions = await context.provider.getBlockWithTransactions(txResponse.blockNumber ?? 0);
   if (block.transactions[txReceipt.transactionIndex].hash !== txResponse.hash) {
-    context.log("⛔ The position of the target transaction doesn't match its index in the block transaction array.");
-    return;
+    throw new Error("The position of the target transaction doesn't match its index in the block transaction array");
   }
   context.log(
-    "✅ The block has been gotten successfully. The number of transactions prior the target one:",
+    "✔ The block has been gotten successfully. The number of transactions prior the target one:",
     txReceipt.transactionIndex
   );
   context.logEmptyLine();
@@ -358,18 +436,18 @@ async function main() {
     params: [
       {
         forking: {
-          jsonRpcUrl: rpcUrl,
+          jsonRpcUrl: context.config.rpcUrl,
           blockNumber: previousBlockNumber,
         },
       },
     ],
   });
-  context.log("✅ The resetting has done successfully. The current block:", previousBlockNumber);
+  context.log("✔ The resetting has done successfully. The current block:", previousBlockNumber);
   context.logEmptyLine();
 
   context.log("🏁 Minting the block", previousBlockNumber, "...");
   await ethers.provider.send("evm_mine", []);
-  context.log("✅ The minting has done successfully.");
+  context.log("✔ The minting has done successfully.");
   context.logEmptyLine();
 
   if (txReceipt.transactionIndex > 0) {
@@ -377,24 +455,92 @@ async function main() {
     context.increaseLogIndent();
     await sendPreviousTransactions(block, txResponse, context);
     context.decreaseLogIndent();
-    context.log("✅ All the previous transactions have been sent!");
+    context.log("✔ All the previous transactions have been sent!");
     context.logEmptyLine();
   }
 
   context.log("🏁 Sending the target transaction to the forked network ...");
   try {
     await ethers.provider.sendTransaction(txResponse.raw);
-    context.log("✅ The transaction has been sent and minted successfully!");
+    result = "✅ The transaction has been sent and minted successfully!";
   } catch (e: any) {
-    context.increaseLogIndent();
     const decodingResult: string = await decodeExceptionData(e);
-    context.decreaseLogIndent();
-    context.log(`❌ The transaction sending or minting has been failed! The exception message: ${e.message}\n` + decodingResult);
+    if (decodingResult.length != 0 && txHash != "0x2d83b7fa295da0a41684c97ff1eb92f0241735859062a4e943ae343d754e9804") {
+      result = decodingResult;
+    } else {
+      result = `❌ The transaction sending or minting has been failed with the exception: ${e.message}`;
+    }
+  }
+  context.log(result);
+  return result;
+}
+
+function logParameters(context: Context) {
+  if (context.config.txHashesFilePath.length == 0) {
+    context.log("👉 The transactions are taken from the provided list.");
+  } else {
+    context.log("👉 The transactions are taken from the provided file:", context.config.txHashesFilePath);
+  }
+  context.log("👉 The total number of transactions to replay:", context.txHashes.length);
+  if (context.config.outputFilePath.length == 0) {
+    context.log("👉 The results will not be stored to a file.");
+  } else {
+    context.log("👉 The results will be stored to file:", context.config.outputFilePath);
   }
   context.logEmptyLine();
+}
+
+async function main() {
+  context.log(`👋 Transaction replayer is ready.`);
+  context.initProvider();
+  await context.initTxHashes();
+  context.initStorageFile();
+
+  context.increaseLogIndent();
+  logParameters(context);
   context.decreaseLogIndent();
 
-  context.log("✅ Everything is done! Bye.");
+  context.log(`🏁 Checking the original network RPC with URL:`, config.rpcUrl, "...");
+  const originalNetwork = await context.provider.getNetwork();
+  if (originalNetwork.chainId !== network.config.chainId) {
+    context.log(
+      "⛔ The original network chain ID does not match the one of the Hardhat network! " +
+      "Check the settings in the 'hardhat.config.ts' file. Check the original network RPC URL."
+    );
+    return;
+  }
+  context.log("✔ The check has been finished successfully. The RPC looks fine.");
+
+  const txTotal = context.txHashes.length;
+  const txTotalFormatted = txTotal.toString();
+  for (let i = 0; i < txTotal; ++i) {
+    const txHash: string = context.txHashes[i];
+    const txNumberFormatted = ((i + 1).toString()).padStart(txTotalFormatted.length);
+    let result: string = "";
+    context.logEmptyLine();
+    context.log(`▶ Replaying the transaction ${txNumberFormatted} from ${txTotalFormatted} with hash`, txHash, "...");
+    if (!verboseLogging) {
+      context.disableLog();
+    }
+    try {
+      context.increaseLogIndent();
+      result = await replaySingleTransaction(txHash, context);
+      context.decreaseLogIndent();
+      if (!verboseLogging) {
+        context.enableLog();
+        context.log(result);
+      }
+    } catch (e: any) {
+      result = "⛔ An exception rose before transaction sending: " + e.message;
+      context.decreaseLogIndent();
+      context.enableLog();
+      context.log(result);
+    }
+    context.storeResult(txHash, result);
+  }
+
+  context.logEmptyLine();
+  context.log("🎉 Everything is done! Bye.");
 }
 
 main();

@@ -7,6 +7,7 @@
     "postinstall": "patch-package"
   },
   "dependencies": {
+    "csv-parse": "^5.4.0",
     "pino": "^8.14.1",
     "pino-pretty": "^10.0.0"
   }
