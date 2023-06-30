@@ -12,16 +12,16 @@ import fs from "fs";
 import os from "os";
 
 // Script input parameters
-const rpcUrl: string = process.env.SP_RPC_URL || "https://polygon-rpc.com";
-const txHashes: string = process.env.SP_TX_HASHES || `
+const rpcUrl: string = process.env.SP_RPC_URL ?? "https://polygon-rpc.com";
+const txHashes: string = process.env.SP_TX_HASHES ?? `
 0xca284df3888756806e406c50b6e1f9d45c1997c44972704b06f8162de450211f
 0xd556849b8a916d7dff644eb97288ffa1f26e810805cb98ebcbff3f95c8957abe
 `;
-const txHashesFile: string = process.env.SP_TX_HASHES_FILE || "";
-const txHashesColumn: string = process.env.SP_TX_HASHES_COLUMN || `tx_hash`;
-const columnDelimiter: string = process.env.SP_COLUMN_DELIMITER || `\t`;
-const outputFile: string = process.env.SP_OUTPUT_FILE || "";
-const verboseLogging: boolean = (process.env.SP_VERBOSE_LOGGING || "false").toLowerCase() === "true";
+const txHashesFile: string = process.env.SP_TX_HASHES_FILE ?? "";
+const txHashesColumn: string = process.env.SP_TX_HASHES_COLUMN ?? `tx_hash`;
+const columnDelimiter: string = process.env.SP_COLUMN_DELIMITER ?? `\t`;
+const outputFile: string = process.env.SP_OUTPUT_FILE ?? "";
+const verboseLogging: boolean = (process.env.SP_VERBOSE_LOGGING ?? "false").toLowerCase() === "true";
 
 // Script config
 interface Config {
@@ -238,10 +238,10 @@ async function getDeployableContractEntities(): Promise<ContractEntity[]> {
 }
 
 async function decodeCustomErrorData(errorData: string): Promise<string[]> {
-  const deployableContractEntites = await getDeployableContractEntities();
+  const deployableContractEntities = await getDeployableContractEntities();
   const decodedCustomErrorStrings: string[] = [];
 
-  deployableContractEntites.forEach(contractEntity => {
+  deployableContractEntities.forEach(contractEntity => {
     try {
       const errorDescription: ErrorDescription = contractEntity.contractFactory.interface.parseError(errorData);
       const decodedArgs: string = errorDescription.args.map(arg => {
@@ -540,4 +540,6 @@ async function main() {
   context.log("🎉 Everything is done! Bye.");
 }
 
-main();
+main().then().catch(err => {
+  throw err;
+});
