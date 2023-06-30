@@ -4,11 +4,7 @@ import { Artifact } from "hardhat/src/types/artifacts";
 import { Provider } from "@ethersproject/providers";
 import { ErrorDescription } from "@ethersproject/abi/src.ts/interface";
 import { Result } from "@ethersproject/abi";
-import {
-  BlockWithTransactions,
-  TransactionReceipt,
-  TransactionResponse
-} from "@ethersproject/abstract-provider";
+import { BlockWithTransactions, TransactionReceipt, TransactionResponse } from "@ethersproject/abstract-provider";
 import { Transaction, UnsignedTransaction } from "@ethersproject/transactions";
 import { SignatureLike } from "@ethersproject/bytes";
 import { parse } from "csv-parse";
@@ -390,9 +386,10 @@ async function decodeExceptionData(e: any): Promise<string> {
   if (!!errorData && errorData.length > 2) {
     result += await decodeErrorData(errorData, context);
   } else if (e.message.includes("reverted without a reason")) {
-    result += "❌ The transaction reverted without error data. " +
-      "Perhaps the transaction tries to call a nonexistent contract function or " +
-      "contains wrong data that cannot be used to call a particular contract function.";
+    result += "❌ The transaction reverted without error data. Possible causes are. " +
+      "1. The transaction tries to call a nonexistent contract function; " +
+      "2. The transaction contains wrong data that cannot be used to call a particular contract function. " +
+      "3. The gas limit was reached.";
   }
   return result;
 }
